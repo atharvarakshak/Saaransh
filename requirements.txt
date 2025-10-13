@@ -1,0 +1,14 @@
+streamlit
+sentence_transformers
+langchain
+pyvis.network
+SQLAlchemy==2.0.41
+fastapi==0.115.12
+fastapi-cli==0.0.7
+pymilvus
+sentence-transformers
+qdrant-client
+pyvis
+faiss-cpu
+//faiss-gpu-cu12
+PyPDF2
