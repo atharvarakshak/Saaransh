@@ -1,0 +1,16 @@
+# GPU-accelerated dependencies (install these if you have CUDA/GPU support)
+# Uncomment the lines below if you want GPU acceleration:
+
+# For GPU-accelerated FAISS (requires CUDA)
+# faiss-gpu
+
+# For GPU-accelerated vector databases
+# pymilvus
+# qdrant-client
+
+# For GPU-accelerated sentence transformers (optional)
+# torch
+# transformers
+
+# Additional GPU dependencies that might be needed
+# cupy-cuda11x  # or cupy-cuda12x depending on your CUDA version

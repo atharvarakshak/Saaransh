@@ -1,14 +1,15 @@
+# Core dependencies for CPU-only development
 streamlit
-sentence_transformers
-langchain
-pyvis.network
-SQLAlchemy==2.0.41
-fastapi==0.115.12
-fastapi-cli==0.0.7
-pymilvus
 sentence-transformers
-qdrant-client
+langchain
 pyvis
 faiss-cpu
-//faiss-gpu-cu12
 PyPDF2
+pdfplumber
+PyMuPDF
+python-docx
+numpy
+langchain-text-splitters
+python-dotenv
+google-generativeai
+Pillow
