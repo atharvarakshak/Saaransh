@@ -98,52 +98,144 @@ if uploaded_files or uploaded_images:
         st.warning("No content extracted from uploaded files!")
         st.stop()
     
-    st.write(f"Total Items: {len(all_chunks)} (Text chunks + Images)")
+    text_count = sum(1 for m in chunk_metadata if m['type'] == 'text')
+    image_count = sum(1 for m in chunk_metadata if m['type'] == 'image')
+    st.write(f"Total Items: {len(all_chunks)} (Text chunks: {text_count}, Images: {image_count})")
     
-    # Generate embeddings based on content type
-    text_chunks = [all_chunks[i] for i, meta in enumerate(chunk_metadata) if meta["type"] == "text"]
-    image_chunks = [all_chunks[i] for i, meta in enumerate(chunk_metadata) if meta["type"] == "image"]
+    # Generate embeddings in the same order as all_chunks to maintain alignment
+    text_indices = [i for i, meta in enumerate(chunk_metadata) if meta["type"] == "text"]
+    image_indices = [i for i, meta in enumerate(chunk_metadata) if meta["type"] == "image"]
     
-    embeddings_list = []
-    
-    # Embed text chunks
-    if text_chunks:
-        text_embeddings = embed_texts(embedder, text_chunks)
-        embeddings_list.append(text_embeddings)
-    
-    # Embed image chunks
-    if image_chunks:
-        with st.spinner("Processing images..."):
-            image_paths = [Path(chunk) for chunk in image_chunks]
+    # Build embeddings maintaining the order of all_chunks
+    with st.spinner("Generating embeddings for all chunks..."):
+        # Process in batches to maintain order
+        text_chunks_batch = [all_chunks[i] for i in text_indices]
+        image_chunks_batch = [all_chunks[i] for i in image_indices]
+        
+        # Create embeddings for each type
+        text_embeddings_dict = {}
+        text_embeddings_array = None
+        if text_chunks_batch:
+            text_embeddings = embed_texts(embedder, text_chunks_batch)
+            text_embeddings_array = text_embeddings  # keep separate text embeddings
+            for idx, emb in zip(text_indices, text_embeddings):
+                text_embeddings_dict[idx] = emb
+        
+        image_embeddings_dict = {}
+        image_embeddings_array = None
+        if image_chunks_batch:
+            image_paths = [Path(all_chunks[i]) for i in image_indices]
             image_embeddings = embed_images(embedder, image_paths)
-            embeddings_list.append(image_embeddings)
+            image_embeddings_array = image_embeddings  # keep separate image embeddings
+            for idx, emb in zip(image_indices, image_embeddings):
+                image_embeddings_dict[idx] = emb
+        
+        # Reconstruct embeddings in the same order as all_chunks
+        ordered_embeddings = []
+        for i in range(len(all_chunks)):
+            if i in text_embeddings_dict:
+                ordered_embeddings.append(text_embeddings_dict[i])
+            elif i in image_embeddings_dict:
+                ordered_embeddings.append(image_embeddings_dict[i])
+        
+        np_embeddings = np.array(ordered_embeddings, dtype=np.float32)
     
-    # Concatenate all embeddings
-    np_embeddings = np.vstack(embeddings_list) if embeddings_list else np.array([], dtype=np.float32)
-    
-    st.success("Embeddings generated successfully!")
+    st.success("Embeddings generated successfully! (separate text/image embeddings computed)")
 
     # Store in FAISS (inner product for cosine)
     index, dim = build_faiss_index(np_embeddings)
+    # Build separate FAISS indices for text and images (if available)
+    text_index = None
+    image_index = None
+    if text_embeddings_array is not None and len(text_embeddings_array) > 0:
+        text_index, _ = build_faiss_index(text_embeddings_array)
+    if image_embeddings_array is not None and len(image_embeddings_array) > 0:
+        image_index, _ = build_faiss_index(image_embeddings_array)
 
     st.success("Stored in FAISS successfully!")
     
+    # Graph visualization settings in sidebar
+    with st.sidebar:
+        st.subheader("📊 Graph Settings")
+        graph_threshold = st.slider(
+            "Graph Edge Threshold",
+            min_value=0.1,
+            max_value=0.95,
+            value=0.5,
+            step=0.05,
+            help="Minimum similarity score to show an edge between nodes"
+        )
+    
     # Build similarity matrix (only for visualization, can be slow with many items)
     if len(all_chunks) <= 100:  # Limit graph size for performance
-        similarity_matrix = compute_similarity_matrix(np_embeddings)
-        graph = build_graph(similarity_matrix, all_chunks)
+        with st.spinner("Building similarity matrix and graph..."):
+            if np_embeddings.size == 0 or np_embeddings.shape[0] == 0:
+                st.warning("No embeddings to visualize.")
+                html_content = None
+                edge_count = 0
+            else:
+                similarity_matrix = compute_similarity_matrix(np_embeddings)
+                n_items = similarity_matrix.shape[0]
+                if n_items < 2:
+                    max_sim = min_sim = mean_sim = 0.0
+                    edge_count = 0
+                else:
+                    triu_indices = np.triu_indices(n_items, k=1)
+                    upper_vals = similarity_matrix[triu_indices]
+                    if upper_vals.size == 0:
+                        max_sim = min_sim = mean_sim = 0.0
+                        edge_count = 0
+                    else:
+                        max_sim = float(np.max(upper_vals))
+                        min_sim = float(np.min(upper_vals))
+                        mean_sim = float(np.mean(upper_vals))
+                        edge_count = int(np.sum(upper_vals > graph_threshold))
+                if n_items >= 2:
+                    st.info(f"📊 Similarity stats: Min={min_sim:.3f}, Max={max_sim:.3f}, Mean={mean_sim:.3f}")
+            
+                if edge_count == 0 and n_items > 1:
+                    st.warning(f"⚠️ No edges found above threshold {graph_threshold:.2f}. Try lowering it to see connections.")
+            
+            if np_embeddings.size != 0:
+                graph = build_graph(similarity_matrix, all_chunks, chunk_metadata, threshold=graph_threshold)
+            
+            # Verify nodes and edges were added to the network
+            try:
+                node_count_check = len(graph.nodes)
+                edge_count_check = len(graph.edges)
+                st.debug(f"Graph object has {node_count_check} nodes and {edge_count_check} edges")
+            except:
+                pass
+            
+            # Generate HTML in-memory to avoid IO/timing issues
+            try:
+                html_content = graph.generate_html()
+            except Exception as e:
+                st.error(f"Error generating graph HTML: {str(e)}")
+                html_content = None
+            else:
+                if len(html_content or "") < 100:
+                    st.error("⚠️ Generated HTML content seems too short. Check PyVis installation.")
+                    html_content = None
+                # Do not inject any on-load scripts that could trigger movement
+
+        st.subheader("🕸️ Knowledge Graph Visualization")
+        st.caption(f"Showing {len(all_chunks)} nodes ({text_count} text, {image_count} images) with {edge_count} edges (similarity > {graph_threshold:.2f})")
         
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as tmp_file:
-            graph.write_html(tmp_file.name)
-            html_path = tmp_file.name
-
-        with open(html_path, "r", encoding="utf-8") as f:
-            html_content = f.read()
-
-        st.components.v1.html(html_content, height=600, width=1200, scrolling=True)
-        st.success("Graph visualization complete!")
+        # Display the graph with better error handling
+        if html_content and len(html_content) > 100:
+            try:
+                st.components.v1.html(html_content, height=700, width=None, scrolling=True)
+            except Exception as e:
+                st.error(f"❌ Error displaying graph: {str(e)}")
+                st.warning("💡 Troubleshooting tips:")
+                st.markdown("- Lower the threshold in the sidebar (try 0.3-0.5)")
+                st.markdown("- Ensure you have at least 2 chunks to visualize")
+                st.markdown("- Check browser console for JavaScript errors")
+        else:
+            st.error("⚠️ Failed to generate graph HTML. Check that nodes were added correctly.")
     else:
-        st.info("Graph visualization skipped (too many items). Focus on search functionality.")
+        st.info(f"Graph visualization skipped (too many items: {len(all_chunks)}). Focus on search functionality.")
 
     # Search interface
     st.divider()
@@ -152,11 +244,17 @@ if uploaded_files or uploaded_images:
     # Sidebar controls for search
     with st.sidebar:
         st.subheader("🔧 Search Settings")
+        search_modality = st.selectbox(
+            "Search Modality",
+            options=["All", "Text only", "Image only"],
+            index=0,
+            help="Choose which embeddings to search over"
+        )
         similarity_threshold = st.slider(
             "Minimum Similarity Threshold", 
             min_value=0.1, 
             max_value=0.9, 
-            value=0.25, 
+            value=0.20, 
             step=0.05,
             help="Higher values = more relevant results, fewer results"
         )
@@ -192,7 +290,28 @@ if uploaded_files or uploaded_images:
         
         # Search
         q_emb = q_emb.reshape(1, -1)  # Reshape for FAISS
-        D, I = search_index(index, q_emb, k=max_results, min_similarity=similarity_threshold)
+        # Route to the selected modality
+        if search_modality == "Text only":
+            if text_index is None:
+                st.warning("No text embeddings available to search.")
+                st.stop()
+            D_tmp, I_tmp = search_index(text_index, q_emb, k=max_results, min_similarity=similarity_threshold)
+            # Map indices from text batch back to original all_chunks indices
+            mapped_indices = [text_indices[i] for i in I_tmp[0]] if I_tmp.size > 0 else []
+            D = np.array([D_tmp[0][:len(mapped_indices)]]) if len(mapped_indices) > 0 else np.array([[]])
+            I = np.array([mapped_indices], dtype=int) if len(mapped_indices) > 0 else np.array([[]], dtype=int)
+        elif search_modality == "Image only":
+            if image_index is None:
+                st.warning("No image embeddings available to search.")
+                st.stop()
+            D_tmp, I_tmp = search_index(image_index, q_emb, k=max_results, min_similarity=similarity_threshold)
+            # Map indices from image batch back to original all_chunks indices
+            mapped_indices = [image_indices[i] for i in I_tmp[0]] if I_tmp.size > 0 else []
+            D = np.array([D_tmp[0][:len(mapped_indices)]]) if len(mapped_indices) > 0 else np.array([[]])
+            I = np.array([mapped_indices], dtype=int) if len(mapped_indices) > 0 else np.array([[]], dtype=int)
+        else:
+            # All embeddings (combined)
+            D, I = search_index(index, q_emb, k=max_results, min_similarity=similarity_threshold)
         
         if len(I[0]) == 0:
             st.warning(f"No results found above similarity threshold {similarity_threshold:.2f}. Try lowering the threshold.")
