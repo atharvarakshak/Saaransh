@@ -1,0 +1,27 @@
+{
+    "name": "get_codeforces_problems",
+    "description": "Fetch problems and statistics from Codeforces problemset API based on optional filters like tags, range, and problemset name.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "tags": {
+          "type": "string",
+          "description": "Semicolon-separated list of problem tags to filter, e.g., 'dp;greedy'. Optional."
+        },
+        "problemsetName": {
+          "type": "string",
+          "description": "Specific problemset name to fetch from (default: all). Optional."
+        },
+        "from": {
+          "type": "integer",
+          "description": "Index of the first problem to return (1-based). Optional."
+        },
+        "count": {
+          "type": "integer",
+          "description": "Number of problems to return starting from 'from'. Optional."
+        }
+      },
+      "required": []
+    }
+  }
+  
